@@ -1,0 +1,3 @@
+node --env-file=.env tests/contact_discovery.mjs
+node --env-file=.env tests/contact_discovery_linkedin.mjs
+node --env-file=.env tests/text_extractor.mjs
