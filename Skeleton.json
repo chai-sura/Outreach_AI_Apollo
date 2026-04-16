@@ -1,0 +1,493 @@
+{
+  "pipeline_name": "cold_outreach_pipeline",
+  "goal": "Transform a candidate's professional profile and a target company into a set of personalized, strategically grounded cold outreach emails ready for review and send.",
+  "modules": [
+    {
+      "module_name": "candidate_profile_extractor",
+      "purpose": "Parse and normalize raw candidate inputs into a structured profile consumable by downstream modules.",
+      "inputs": {
+        "resume_text": "string",
+        "linkedin_summary": "string | null",
+        "portfolio_text": "string | null",
+        "job_preferences": {
+          "target_roles": "string[]",
+          "target_industries": "string[]",
+          "preferred_company_size": "enum: startup | mid_size | enterprise | any",
+          "location_preference": "string | null",
+          "remote_preference": "enum: remote | hybrid | onsite | flexible | null"
+        }
+      },
+      "output_schema": {
+        "candidate_profile": "CandidateProfile"
+      },
+      "depends_on": [],
+      "failure_modes": [
+        "Resume text is empty or too short to extract meaningful signal",
+        "Skills or roles cannot be inferred from unstructured text",
+        "LLM hallucinates credentials not present in the input"
+      ],
+      "fallback_behavior": "If extraction confidence is low, return partial profile with populated fields flagged as 'inferred' and missing fields set to null. Do not block pipeline; flag for user review.",
+      "notes": "This is the root module. All downstream modules depend on its output. Validation should enforce that at minimum one role and one skill are extracted."
+    },
+    {
+      "module_name": "contact_search",
+      "purpose": "Query Apollo.io to discover relevant contacts at the target company based on candidate job preferences and target role context.",
+      "inputs": {
+        "target_company_name": "string",
+        "target_roles": "string[]",
+        "target_departments": "string[]"
+      },
+      "output_schema": {
+        "contacts": "RawContact[]",
+        "search_metadata": {
+          "query_used": "string",
+          "total_results": "integer",
+          "filtered_count": "integer"
+        }
+      },
+      "depends_on": ["candidate_profile_extractor"],
+      "failure_modes": [
+        "Apollo API returns zero results for given company and role filters",
+        "Company name does not match Apollo's database (alias or typo)",
+        "API rate limit exceeded",
+        "Apollo returns contacts with no email or LinkedIn URL"
+      ],
+      "fallback_behavior": "If zero contacts found, broaden department filter and retry once. If still empty, return empty contacts array and set a pipeline warning flag. Orchestrator should surface this to the user before proceeding.",
+      "notes": "Target departments should be inferred from target_roles by the orchestrator (e.g., 'Software Engineer' → 'Engineering'). Prioritize contacts with titles matching: hiring manager, engineering manager, recruiter, director, VP."
+    },
+    {
+      "module_name": "contact_enricher",
+      "purpose": "Enrich raw Apollo contact records with additional signals: LinkedIn bio, recent activity, company context, and role seniority normalization.",
+      "inputs": {
+        "contacts": "RawContact[]",
+        "target_company_name": "string"
+      },
+      "output_schema": {
+        "enriched_contacts": "EnrichedContact[]"
+      },
+      "depends_on": ["contact_search"],
+      "failure_modes": [
+        "Apollo enrichment endpoint returns incomplete data for a contact",
+        "LinkedIn URL is present but profile data is unavailable",
+        "Company context fetch fails (private company, no public data)",
+        "All contacts fail enrichment"
+      ],
+      "fallback_behavior": "Contacts that fail enrichment are retained with available fields and flagged as 'partially_enriched'. If all contacts fail, pass through raw contacts with a warning. Never drop a contact solely due to enrichment failure.",
+      "notes": "Limit enrichment to top 5 contacts ranked by relevance score to avoid excessive API calls in MVP. Relevance scoring can be a simple heuristic: seniority weight + department match + email availability."
+    },
+    {
+      "module_name": "candidate_profile_analyzer",
+      "purpose": "Produce a structured analytical summary of the candidate's strengths, positioning, and outreach-relevant signals.",
+      "inputs": {
+        "candidate_profile": "CandidateProfile"
+      },
+      "output_schema": {
+        "candidate_analysis": {
+          "top_strengths": "string[]",
+          "positioning_statement": "string",
+          "unique_value_propositions": "string[]",
+          "credibility_signals": "CredibilitySignal[]",
+          "outreach_tone_fit": "enum: formal | semi_formal | casual",
+          "narrative_arc": "enum: career_switcher | specialist_deepening | generalist_expanding | early_career | senior_leader"
+        }
+      },
+      "depends_on": ["candidate_profile_extractor"],
+      "failure_modes": [
+        "Profile is too sparse to generate meaningful strengths",
+        "LLM produces generic non-differentiating value propositions",
+        "Tone or narrative arc misclassified due to ambiguous profile signals"
+      ],
+      "fallback_behavior": "If fewer than 2 unique_value_propositions can be extracted, use available signals and flag output as 'low_confidence'. Default tone to 'semi_formal' if unclear.",
+      "notes": "This module runs in parallel with contact_enricher. Output feeds both overlap_analyzer and outreach_strategy_planner."
+    },
+    {
+      "module_name": "contact_profile_analyzer",
+      "purpose": "Produce a structured analytical summary of each enriched contact's role, background, interests, and receptivity signals.",
+      "inputs": {
+        "enriched_contacts": "EnrichedContact[]"
+      },
+      "output_schema": {
+        "contact_analyses": "ContactAnalysis[]"
+      },
+      "depends_on": ["contact_enricher"],
+      "failure_modes": [
+        "Contact has no bio or activity data to analyze",
+        "Contact role is ambiguous (e.g., 'Consultant' with no department context)",
+        "LLM over-infers interests from minimal data"
+      ],
+      "fallback_behavior": "If a contact has insufficient data, produce a minimal ContactAnalysis with only role and company fields populated and set confidence to 'low'. Include this contact in downstream processing but label emails generated for them as 'low_confidence'.",
+      "notes": "Analyze only the top N contacts passed from contact_enricher. Each ContactAnalysis maps 1:1 to an EnrichedContact by contact_id."
+    },
+    {
+      "module_name": "overlap_analyzer",
+      "purpose": "Identify the strongest credible overlap between the candidate and each contact to form the basis of a genuine connection.",
+      "inputs": {
+        "candidate_analysis": "CandidateProfile + candidate_analysis output",
+        "contact_analyses": "ContactAnalysis[]"
+      },
+      "output_schema": {
+        "overlap_maps": "OverlapMap[]"
+      },
+      "depends_on": ["candidate_profile_analyzer", "contact_profile_analyzer"],
+      "failure_modes": [
+        "No meaningful overlap exists between candidate and contact",
+        "Overlap is superficial (e.g., both used Python) and lacks credibility signal",
+        "LLM fabricates overlap not grounded in input data"
+      ],
+      "fallback_behavior": "If no strong overlap is found, fall back to company/industry-level overlap (e.g., 'both worked in fintech'). If still none, set overlap_type to 'cold_shared_goal' and use the candidate's stated interest in the company as the connection hook. Never fabricate a shared employer or credential.",
+      "notes": "This is the most critical module for email quality. Overlap quality directly determines email authenticity. Overlap must be traceable to a field in the input data."
+    },
+    {
+      "module_name": "outreach_strategy_planner",
+      "purpose": "Determine the optimal outreach angle, email structure, and tone for each candidate-contact pair based on overlap and profile signals.",
+      "inputs": {
+        "overlap_maps": "OverlapMap[]",
+        "candidate_analysis": "object (candidate_profile_analyzer output)",
+        "contact_analyses": "ContactAnalysis[]"
+      },
+      "output_schema": {
+        "outreach_strategies": "OutreachStrategy[]"
+      },
+      "depends_on": ["overlap_analyzer"],
+      "failure_modes": [
+        "Strategy is too generic to guide a differentiated email",
+        "Strategy calls for a hook that is not supported by available overlap data",
+        "Contact seniority level mismatched with suggested approach"
+      ],
+      "fallback_behavior": "If strategy confidence is low, default to 'shared_mission' approach with a direct ask. Avoid speculative strategies (e.g., do not suggest a referral ask if no shared connection exists).",
+      "notes": "One OutreachStrategy per contact. The strategy drives email generation and must include an explicit opening_hook, ask_type, and tone. This module should not generate email copy — only strategy parameters."
+    },
+    {
+      "module_name": "email_generator",
+      "purpose": "Generate short, personalized cold outreach emails for each contact using the outreach strategy and overlap map.",
+      "inputs": {
+        "outreach_strategies": "OutreachStrategy[]",
+        "overlap_maps": "OverlapMap[]",
+        "candidate_profile": "CandidateProfile"
+      },
+      "output_schema": {
+        "generated_emails": "GeneratedEmail[]"
+      },
+      "depends_on": ["outreach_strategy_planner"],
+      "failure_modes": [
+        "Email exceeds word limit and loses conciseness",
+        "Email opens with a generic compliment (e.g., 'I love your work at...')",
+        "Ask is buried or unclear",
+        "Email tone does not match strategy tone parameter",
+        "LLM generates factually incorrect claims about the candidate"
+      ],
+      "fallback_behavior": "If generated email fails internal length or quality checks, regenerate once with stricter constraints. If second generation also fails, flag email as 'needs_review' and pass to email_reviewer regardless.",
+      "notes": "Target email length: 80–120 words. Subject line must be included. No attachments referenced. One email per contact. The ask must appear in the final paragraph."
+    },
+    {
+      "module_name": "email_reviewer",
+      "purpose": "Score each generated email against quality criteria and rewrite emails that fall below the quality threshold.",
+      "inputs": {
+        "generated_emails": "GeneratedEmail[]",
+        "outreach_strategies": "OutreachStrategy[]",
+        "overlap_maps": "OverlapMap[]"
+      },
+      "output_schema": {
+        "reviewed_emails": "ReviewedEmail[]"
+      },
+      "depends_on": ["email_generator"],
+      "failure_modes": [
+        "Reviewer scores email highly despite quality issues (false positive)",
+        "Rewrite degrades email quality",
+        "Rewrite changes factual claims or misrepresents the candidate",
+        "Reviewer enters rewrite loop without convergence"
+      ],
+      "fallback_behavior": "Allow maximum 1 rewrite attempt per email. If rewrite score is lower than original, revert to original. Never rewrite more than once. Always return both original and final version in output.",
+      "notes": "Scoring dimensions: specificity, conciseness, clarity_of_ask, tone_match, credibility. Each scored 1–5. Rewrite is triggered if any dimension scores below 3 or total score is below 18/25."
+    }
+  ],
+  "shared_types": {
+    "CandidateProfile": {
+      "candidate_id": "string (uuid)",
+      "full_name": "string | null",
+      "current_title": "string | null",
+      "years_of_experience": "integer | null",
+      "skills": "string[]",
+      "industries": "string[]",
+      "past_companies": "string[]",
+      "notable_projects": {
+        "title": "string",
+        "description": "string",
+        "impact": "string | null"
+      },
+      "education": {
+        "degree": "string | null",
+        "institution": "string | null",
+        "field": "string | null"
+      },
+      "job_preferences": {
+        "target_roles": "string[]",
+        "target_industries": "string[]",
+        "preferred_company_size": "enum: startup | mid_size | enterprise | any",
+        "location_preference": "string | null",
+        "remote_preference": "enum: remote | hybrid | onsite | flexible | null"
+      },
+      "raw_resume_text": "string"
+    },
+    "RawContact": {
+      "contact_id": "string (uuid)",
+      "full_name": "string",
+      "title": "string | null",
+      "department": "string | null",
+      "company_name": "string",
+      "email": "string | null",
+      "linkedin_url": "string | null",
+      "apollo_id": "string | null",
+      "seniority_level": "enum: individual_contributor | manager | director | vp | c_suite | unknown"
+    },
+    "EnrichedContact": {
+      "contact_id": "string (uuid)",
+      "base": "RawContact",
+      "bio_summary": "string | null",
+      "recent_activity_signals": "string[]",
+      "shared_connections": "integer | null",
+      "company_context": {
+        "company_size": "enum: startup | mid_size | enterprise | unknown",
+        "industry": "string | null",
+        "tech_stack_signals": "string[]",
+        "recent_news": "string | null"
+      },
+      "enrichment_status": "enum: full | partial | minimal",
+      "relevance_score": "float (0.0–1.0)"
+    },
+    "ContactAnalysis": {
+      "contact_id": "string (uuid)",
+      "inferred_priorities": "string[]",
+      "likely_pain_points": "string[]",
+      "receptivity_signals": "string[]",
+      "preferred_communication_style": "enum: direct | relationship_first | data_driven | unknown",
+      "confidence": "enum: high | medium | low"
+    },
+    "CredibilitySignal": {
+      "signal_type": "enum: award | publication | open_source | speaking | revenue_impact | scale_impact | domain_expertise | education",
+      "description": "string",
+      "source": "enum: resume | linkedin | portfolio"
+    },
+    "OverlapMap": {
+      "contact_id": "string (uuid)",
+      "overlap_type": "enum: shared_employer | shared_technology | shared_industry | shared_alma_mater | complementary_expertise | shared_mission | cold_shared_goal",
+      "overlap_summary": "string",
+      "overlap_strength": "enum: strong | moderate | weak",
+      "supporting_evidence": {
+        "candidate_field": "string",
+        "contact_field": "string",
+        "overlap_detail": "string"
+      }
+    },
+    "OutreachStrategy": {
+      "contact_id": "string (uuid)",
+      "approach_type": "enum: warm_intro_reference | shared_background | complementary_value | direct_value_proposition | mission_alignment | curiosity_hook",
+      "opening_hook": "string",
+      "ask_type": "enum: informational_interview | job_referral | intro_to_hiring_manager | advice_request | collaboration_inquiry",
+      "tone": "enum: formal | semi_formal | casual",
+      "length_target": "enum: very_short_60w | short_80w | medium_120w",
+      "do_not_mention": "string[]",
+      "strategy_confidence": "enum: high | medium | low"
+    },
+    "GeneratedEmail": {
+      "contact_id": "string (uuid)",
+      "subject_line": "string",
+      "body": "string",
+      "word_count": "integer",
+      "generation_attempt": "integer",
+      "flagged_for_review": "boolean"
+    },
+    "ReviewedEmail": {
+      "contact_id": "string (uuid)",
+      "final_subject_line": "string",
+      "final_body": "string",
+      "original_email": "GeneratedEmail",
+      "was_rewritten": "boolean",
+      "quality_scores": {
+        "specificity": "integer (1–5)",
+        "conciseness": "integer (1–5)",
+        "clarity_of_ask": "integer (1–5)",
+        "tone_match": "integer (1–5)",
+        "credibility": "integer (1–5)",
+        "total": "integer (5–25)"
+      },
+      "review_notes": "string[]",
+      "ready_to_send": "boolean"
+    }
+  },
+  "orchestrator_contract": {
+    "input": {
+      "resume_text": "string (required)",
+      "linkedin_summary": "string | null",
+      "portfolio_text": "string | null",
+      "job_preferences": {
+        "target_roles": "string[] (required, min 1)",
+        "target_industries": "string[]",
+        "preferred_company_size": "enum: startup | mid_size | enterprise | any",
+        "location_preference": "string | null",
+        "remote_preference": "enum: remote | hybrid | onsite | flexible | null"
+      },
+      "target_company_name": "string (required)"
+    },
+    "output": {
+      "pipeline_run_id": "string (uuid)",
+      "status": "enum: success | partial_success | failed",
+      "candidate_profile": "CandidateProfile",
+      "reviewed_emails": "ReviewedEmail[]",
+      "pipeline_warnings": "string[]",
+      "module_statuses": {
+        "module_name": "enum: success | skipped | fallback_used | failed"
+      },
+      "total_contacts_found": "integer",
+      "total_emails_generated": "integer",
+      "emails_ready_to_send": "integer"
+    },
+    "execution_order": [
+      {
+        "step": 1,
+        "module": "candidate_profile_extractor",
+        "execution_type": "sequential"
+      },
+      {
+        "step": 2,
+        "modules": ["contact_search", "candidate_profile_analyzer"],
+        "execution_type": "parallel"
+      },
+      {
+        "step": 3,
+        "module": "contact_enricher",
+        "execution_type": "sequential",
+        "depends_on_step": 2
+      },
+      {
+        "step": 4,
+        "module": "contact_profile_analyzer",
+        "execution_type": "sequential",
+        "depends_on_step": 3
+      },
+      {
+        "step": 5,
+        "module": "overlap_analyzer",
+        "execution_type": "sequential",
+        "depends_on_step": 4
+      },
+      {
+        "step": 6,
+        "module": "outreach_strategy_planner",
+        "execution_type": "sequential",
+        "depends_on_step": 5
+      },
+      {
+        "step": 7,
+        "module": "email_generator",
+        "execution_type": "sequential",
+        "depends_on_step": 6
+      },
+      {
+        "step": 8,
+        "module": "email_reviewer",
+        "execution_type": "sequential",
+        "depends_on_step": 7
+      }
+    ],
+    "retry_policy": {
+      "default_max_retries": 2,
+      "retry_on": ["llm_timeout", "malformed_output", "api_rate_limit"],
+      "no_retry_on": ["empty_contact_results", "low_confidence_profile"],
+      "backoff_strategy": "exponential",
+      "per_module_overrides": {
+        "email_reviewer": {
+          "max_rewrites": 1,
+          "revert_on_score_regression": true
+        },
+        "contact_search": {
+          "max_retries": 1,
+          "broaden_filter_on_first_retry": true
+        }
+      }
+    },
+    "validation_rules": [
+      "resume_text must be at least 100 characters before pipeline is started",
+      "target_company_name must be non-empty string",
+      "job_preferences.target_roles must contain at least 1 item",
+      "candidate_profile_extractor output must contain at least 1 skill and 1 role before pipeline continues",
+      "contact_search must return at least 1 contact before contact_enricher runs; otherwise surface warning and halt",
+      "overlap_analyzer must produce an OverlapMap for every contact passed from contact_profile_analyzer",
+      "outreach_strategy_planner must produce one OutreachStrategy per OverlapMap",
+      "email_generator must produce one GeneratedEmail per OutreachStrategy",
+      "email_reviewer must produce one ReviewedEmail per GeneratedEmail",
+      "GeneratedEmail word_count must be between 50 and 150; flag and regenerate if outside range",
+      "ReviewedEmail.ready_to_send must only be true if total quality score >= 18",
+      "No module may pass null contact_id between modules; contact_id must be preserved end-to-end",
+      "OverlapMap.supporting_evidence fields must reference actual fields present in candidate_profile and enriched_contacts inputs"
+    ]
+  },
+  "global_rules": [
+    "All LLM prompts must include explicit instructions to only use information present in the provided inputs; hallucination of credentials, employers, or connections is a critical failure",
+    "All module outputs must be valid JSON matching their defined output_schema before being passed to the next module",
+    "Contact data (email, LinkedIn URL) must never be logged in plaintext outside of secure pipeline storage",
+    "Pipeline must not proceed past contact_search if zero contacts are returned without explicit user acknowledgment",
+    "Emails must not reference the candidate's specific salary expectations or compensation unless explicitly included in job_preferences",
+    "All enum fields must reject unlisted values at validation time and raise a schema_violation error",
+    "Module execution time budget: each LLM module should complete within 15 seconds; flag slow modules for async fallback in production",
+    "If a module uses a fallback path, the orchestrator must include a corresponding entry in pipeline_warnings",
+    "Email copy must never claim the candidate has already interviewed or spoken with the contact unless explicitly documented in overlap data",
+    "The pipeline must be stateless per run; no module may rely on state from a previous pipeline run"
+  ],
+  "integration_risks": [
+    {
+      "risk": "Apollo API contact data quality is inconsistent; many contacts lack email or have outdated titles",
+      "severity": "high",
+      "affected_modules": ["contact_search", "contact_enricher"],
+      "mitigation": "Build relevance scoring that degrades gracefully on sparse data; always fallback to LinkedIn URL as primary contact signal if email is missing"
+    },
+    {
+      "risk": "LLM output schema drift: model returns unexpected keys or omits required fields",
+      "severity": "high",
+      "affected_modules": ["all LLM modules"],
+      "mitigation": "Use strict JSON schema validation after every LLM call; define a schema_violation error type that triggers a retry with a corrective prompt"
+    },
+    {
+      "risk": "Overlap analyzer may produce superficial or fabricated overlap if input data is sparse",
+      "severity": "high",
+      "affected_modules": ["overlap_analyzer", "email_generator"],
+      "mitigation": "Require supporting_evidence to reference traceable input fields; set overlap_strength to 'weak' and use cold_shared_goal fallback rather than inventing overlap"
+    },
+    {
+      "risk": "Parallel execution of candidate_profile_analyzer and contact_search may produce race conditions if orchestrator is not async-safe",
+      "severity": "medium",
+      "affected_modules": ["orchestrator"],
+      "mitigation": "Use promise-based parallel execution with explicit join gates before dependent steps proceed"
+    },
+    {
+      "risk": "Email reviewer rewrite may introduce factual errors not present in the original generated email",
+      "severity": "medium",
+      "affected_modules": ["email_reviewer"],
+      "mitigation": "Reviewer rewrite prompt must include the original candidate_profile and overlap_map as grounding context; revert to original if score regresses"
+    },
+    {
+      "risk": "Company name aliasing: user enters 'Google' but Apollo indexes it as 'Google LLC' or 'Alphabet'",
+      "severity": "medium",
+      "affected_modules": ["contact_search"],
+      "mitigation": "Implement a company name normalization step or fuzzy match before passing to Apollo; surface top 3 matched company names to user for confirmation in MVP"
+    },
+    {
+      "risk": "Token budget exceeded for long resumes or large contact enrichment payloads passed to LLM modules",
+      "severity": "medium",
+      "affected_modules": ["candidate_profile_extractor", "overlap_analyzer", "email_generator"],
+      "mitigation": "Truncate raw inputs to defined character limits before LLM calls; store full raw data separately and only pass structured summaries downstream"
+    }
+  ],
+  "success_criteria": [
+    "Pipeline produces at least 1 ReviewedEmail with ready_to_send=true given valid resume and company input",
+    "All ReviewedEmail outputs have a total quality score of 18 or above out of 25",
+    "Zero emails contain fabricated credentials, employers, or connections not present in input data",
+    "End-to-end pipeline completes in under 60 seconds for up to 5 contacts on first run",
+    "contact_search returns results for at least 80% of valid company name inputs",
+    "Every module output passes JSON schema validation before being consumed by the next module",
+    "Pipeline_warnings are populated and surfaced to the user for every fallback path taken",
+    "Email word count is between 80 and 120 words for at least 90% of generated emails",
+    "Each email contains exactly one clear ask mapped to ask_type in the corresponding OutreachStrategy",
+    "Overlap type is never 'cold_shared_goal' when meaningful overlap data exists in the enriched contact profile"
+  ]
+}
