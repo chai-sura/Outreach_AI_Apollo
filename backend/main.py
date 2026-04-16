@@ -1,6 +1,5 @@
 import asyncio
 import io
-import os
 import uuid
 from datetime import datetime, timezone
 
@@ -8,7 +7,6 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from openai import AsyncOpenAI  # Groq is OpenAI-compatible
 
 import apollo
 
@@ -62,6 +60,10 @@ class RunPipelineRequest(BaseModel):
     user_query: str    # e.g. "5 recruiters at Apple in Bay Area"
     profile_id: str
 
+class GenerateFromContactsRequest(BaseModel):
+    profile_id: str
+    contacts: list[dict]  # raw contacts from JS linkedin/discovery module
+
 class ApproveEmailRequest(BaseModel):
     subject: str = ""
     body: str = ""
@@ -76,9 +78,7 @@ class MockEventRequest(BaseModel):
 async def do_contact_search(query: str, limit: int = 5) -> list[dict]:
     if _search_and_enrich is not None:
         return await _search_and_enrich(query, limit=limit)
-    contacts = await apollo.search_contacts(query, limit=limit)
-    enriched = await asyncio.gather(*[apollo.enrich_contact(c) for c in contacts])
-    return list(enriched)
+    return []  # contact discovery comes from JS module via /generate-from-contacts
 
 
 def do_extract_profile(user_profile: dict) -> dict:
@@ -101,62 +101,8 @@ def do_extract_profile(user_profile: dict) -> dict:
 async def do_generate_email(candidate: dict, contact: dict) -> dict:
     if _generate_email is not None:
         return await _generate_email(candidate, contact)
-
-    # Groq fallback (OpenAI-compatible)
-    client = AsyncOpenAI(
-        api_key=os.getenv("GROQ_API_KEY", ""),
-        base_url="https://api.groq.com/openai/v1",
-    )
-    context_lines = []
-    if contact.get("headline"):
-        context_lines.append(f"LinkedIn headline: {contact['headline']}")
-    if contact.get("bio"):
-        context_lines.append(f"LinkedIn bio: {contact['bio']}")
-    if contact.get("company_description"):
-        context_lines.append(f"Company: {contact['company_description']}")
-    if contact.get("funding_stage"):
-        context_lines.append(f"Funding: {contact['funding_stage']}")
-    if contact.get("technologies"):
-        context_lines.append(f"Tech: {', '.join(contact['technologies'][:5])}")
-
-    prompt = f"""Write a cold outreach email.
-
-SENDER: {candidate.get('name')} | Goal: {candidate.get('goal')}
-Background: {candidate.get('background_summary', '')}
-
-RECIPIENT: {contact.get('name')}, {contact.get('title')} at {contact.get('company')}
-{chr(10).join(context_lines) or 'No extra context.'}
-
-Rules: max 5 sentences, no "I hope this finds you well", end with a 15-min call ask.
-Format exactly:
-Subject: [subject]
-Body:
-[body]"""
-
-    try:
-        resp = await client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            max_tokens=300,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = resp.choices[0].message.content or ""
-    except Exception as e:
-        print(f"[EmailFallback] Groq error: {e}")
-        return {"subject": f"Quick intro — {candidate.get('name','')}", "body": ""}
-
-    subject, body, in_body = "", "", False
-    for line in raw.strip().split("\n"):
-        if line.startswith("Subject:"):
-            subject = line.replace("Subject:", "").strip()
-        elif line.startswith("Body:"):
-            in_body = True
-        elif in_body:
-            body += line + "\n"
-
-    return {
-        "subject": subject or f"Quick intro — {candidate.get('name','')}",
-        "body": body.strip() or raw.strip(),
-    }
+    # apollo.generate_personalized_email uses LinkedIn + company context + Groq
+    return await apollo.generate_personalized_email(candidate, contact)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -264,6 +210,74 @@ async def run_pipeline(req: RunPipelineRequest):
         "status": "ok",
         "count": len(email_records),
         "message": "Review and approve emails before sending.",
+        "emails": email_records,
+    }
+
+
+@app.post("/generate-from-contacts")
+async def generate_from_contacts(req: GenerateFromContactsRequest):
+    """
+    Accepts pre-fetched contacts from the JS linkedin/discovery module,
+    enriches them via Apollo, and generates personalized emails with Groq.
+    """
+    profile = USER_PROFILES.get(req.profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found — call /onboard first")
+    if not req.contacts:
+        raise HTTPException(status_code=400, detail="contacts list is empty")
+
+    print(f"[GenerateFromContacts] {len(req.contacts)} contacts received")
+
+    # Normalize JS module field names → backend field names
+    normalized = []
+    for c in req.contacts:
+        normalized.append({
+            "id": c.get("id", ""),
+            "name": c.get("full_name") or c.get("name", ""),
+            "title": c.get("title", ""),
+            "company": c.get("organization_name") or c.get("company", ""),
+            "email": c.get("email", ""),
+            "linkedin_url": c.get("linkedin_url", ""),
+            "city": c.get("city", ""),
+            "seniority": c.get("seniority", ""),
+        })
+
+    print("[GenerateFromContacts] Enriching via Apollo...")
+    enriched = await asyncio.gather(*[apollo.enrich_contact(c) for c in normalized])
+
+    candidate = do_extract_profile(profile)
+    now = datetime.now(timezone.utc).isoformat()
+    email_records = []
+
+    print(f"[GenerateFromContacts] Generating {len(enriched)} emails...")
+    for i, contact in enumerate(enriched):
+        print(f"[GenerateFromContacts]   {i+1}/{len(enriched)} → {contact.get('name')} at {contact.get('company')}")
+        email = await do_generate_email(candidate, contact)
+        email_id = str(uuid.uuid4())
+        record = {
+            "email_id": email_id,
+            "profile_id": req.profile_id,
+            "contact_name": contact.get("name", ""),
+            "contact_title": contact.get("title", ""),
+            "company": contact.get("company", ""),
+            "to": contact.get("email", ""),
+            "linkedin_url": contact.get("linkedin_url", ""),
+            "subject": email.get("subject", ""),
+            "body": email.get("body", ""),
+            "status": "pending",
+            "created_at": now,
+            "sent_at": None,
+            "opened": False,
+            "clicked": False,
+            "replied": False,
+        }
+        DRAFT_EMAILS[email_id] = record
+        email_records.append(record)
+
+    return {
+        "status": "ok",
+        "count": len(email_records),
+        "message": "Emails generated from JS module contacts. Review and approve before sending.",
         "emails": email_records,
     }
 
