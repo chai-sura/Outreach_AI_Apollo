@@ -92,94 +92,144 @@ async def enrich_contact(contact: dict) -> dict:
         return contact
 
 
+SYSTEM_PROMPT = """You are an expert assistant that writes short, highly personalized cold outreach emails for job seekers.
+
+Your goal is to help the user get a reply — not to sound impressive.
+
+You optimize for: relevance, clarity, credibility, human tone, brevity.
+You do NOT optimize for: sounding formal, sounding corporate, excessive enthusiasm, generic networking language, flattery.
+
+Core writing principles:
+- Write like a real person, not a template
+- Keep emails concise (70–120 words)
+- Use simple, natural language
+- Avoid buzzwords and filler
+- Prefer specific details over vague statements
+- Make the email easy to reply to
+
+Personalization rules:
+- Only use information explicitly provided in the input
+- Do NOT invent details about the contact or the candidate
+- If limited information is available, use a light and natural tone instead of forcing deep personalization
+- Use the contact's role and company as the primary anchor for relevance
+
+Structure:
+1. Opening line: natural, role-based or context-based (no generic phrases)
+2. One-line introduction of the candidate
+3. One relevant skill, project, or area of interest
+4. A light connection to the contact's role (e.g., recruiting, engineering, hiring)
+5. A soft, low-pressure closing
+
+Strict rules:
+- Do NOT say "I hope you're doing well"
+- Do NOT say "I came across your profile"
+- Do NOT say "I am passionate about"
+- Do NOT directly ask for a job
+- Do NOT overpraise the recipient
+- Do NOT use generic phrases like "excited to connect"
+
+Tone: calm and confident, slightly informal but respectful, concise and thoughtful, written like it took under 2 minutes to write.
+
+Output: Return ONLY the email body text. No subject line. No explanations. No bullet points."""
+
+
 async def generate_personalized_email(candidate: dict, contact: dict) -> dict:
     """
-    Generate a personalized cold email using:
-    - candidate: profile from candidate_profile_extractor (name, goal, skills, background)
-    - contact: enriched Apollo contact (LinkedIn headline, bio, company insights)
-    Uses Groq llama-3.3-70b-versatile via OpenAI-compatible API.
+    Generate a personalized cold email using the contact's LinkedIn + Apollo data
+    and the candidate's extracted profile. Uses Groq llama-3.3-70b-versatile.
     """
     client = AsyncOpenAI(
         api_key=GROQ_API_KEY,
         base_url="https://api.groq.com/openai/v1",
     )
 
-    # Build context from LinkedIn + Apollo enrichment data
-    context_lines = []
-    if contact.get("headline"):
-        context_lines.append(f"LinkedIn headline: {contact['headline']}")
-    if contact.get("bio"):
-        context_lines.append(f"LinkedIn summary: {contact['bio']}")
-    if contact.get("company_description"):
-        context_lines.append(f"Company: {contact['company_description']}")
-    if contact.get("industry"):
-        context_lines.append(f"Industry: {contact['industry']}")
-    if contact.get("funding_stage"):
-        context_lines.append(f"Funding stage: {contact['funding_stage']}")
-    if contact.get("headcount"):
-        context_lines.append(f"Company size: ~{contact['headcount']} employees")
-    if contact.get("technologies"):
-        context_lines.append(f"Tech stack: {', '.join(contact['technologies'][:5])}")
-
-    # Build candidate context
+    # Candidate fields — works with both raw profile and extracted profile
+    c_name = candidate.get("name") or candidate.get("full_name", "")
+    c_title = candidate.get("current_title") or candidate.get("background_summary", "")
+    c_goal_raw = candidate.get("goal") or ""
+    if not c_goal_raw and isinstance(candidate.get("job_preferences"), dict):
+        roles = candidate["job_preferences"].get("target_roles", [])
+        c_goal_raw = roles[0] if roles else ""
     skills = candidate.get("key_skills") or candidate.get("skills", [])
-    skills_str = ", ".join(skills[:6]) if skills else ""
-    past_companies = candidate.get("past_companies", [])
-    companies_str = ", ".join(past_companies[:3]) if past_companies else ""
+    skills_str = ", ".join(skills[:5]) if skills else ""
+    past_cos = ", ".join((candidate.get("past_companies") or [])[:3])
+    notable = ""
+    projects = candidate.get("notable_projects") or []
+    if projects:
+        p = projects[0]
+        notable = f"{p.get('title', '')}: {p.get('impact') or p.get('description', '')}"
 
-    prompt = f"""Write a personalized cold outreach email from a job seeker to a recruiter/hiring contact.
+    # Contact fields — from both contact_discovery and contact_discovery_linkedin
+    co_name = contact.get("name") or contact.get("full_name", "")
+    co_title = contact.get("title", "")
+    co_company = contact.get("company") or contact.get("organization_name", "")
+    co_headline = contact.get("headline", "")
+    co_bio = contact.get("bio", "")
+    co_company_desc = contact.get("company_description", "")
+    co_industry = contact.get("industry", "")
+    co_tech = ", ".join((contact.get("technologies") or [])[:4])
+    co_funding = contact.get("funding_stage", "")
+    co_headcount = contact.get("headcount", "")
 
-SENDER (job seeker):
-Name: {candidate.get('name') or candidate.get('full_name', '')}
-Goal: {candidate.get('goal') or candidate.get('job_preferences', {}).get('target_roles', [''])[0] if isinstance(candidate.get('job_preferences'), dict) else ''}
+    contact_context = "\n".join(filter(None, [
+        f"LinkedIn headline: {co_headline}" if co_headline else "",
+        f"LinkedIn summary: {co_bio}" if co_bio else "",
+        f"Company description: {co_company_desc}" if co_company_desc else "",
+        f"Industry: {co_industry}" if co_industry else "",
+        f"Tech stack: {co_tech}" if co_tech else "",
+        f"Funding stage: {co_funding}" if co_funding else "",
+        f"Company size: ~{co_headcount} employees" if co_headcount else "",
+    ])) or "No additional context available."
+
+    user_prompt = f"""Write a cold outreach email from this job seeker to this contact.
+
+--- CANDIDATE ---
+Name: {c_name}
+Current role / background: {c_title}
+Target role: {c_goal_raw}
 Skills: {skills_str}
-Background: {candidate.get('background_summary') or candidate.get('current_title', '')}
-Past companies: {companies_str}
+Past companies: {past_cos}
+Notable achievement: {notable}
 
-RECIPIENT (contact at {contact.get('company', '')}):
-Name: {contact.get('name', '')}
-Title: {contact.get('title', '')}
-Company: {contact.get('company', '')}
-{chr(10).join(context_lines) if context_lines else 'No additional LinkedIn/company context available.'}
+--- CONTACT ---
+Name: {co_name}
+Title: {co_title}
+Company: {co_company}
+{contact_context}
 
-Rules:
-- Max 5 sentences
-- Reference something specific from their LinkedIn or company (if available)
-- Do NOT say "I hope this email finds you well"
-- End with a specific ask: 15-minute call or coffee chat
-- Warm, professional, not desperate
+Generate the subject line separately on the first line as:
+Subject: [subject]
 
-Format exactly:
-Subject: [subject line]
-Body:
-[email body]"""
+Then the email body (70–120 words, no subject line in body):"""
 
     try:
         resp = await client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            max_tokens=400,
-            messages=[{"role": "user", "content": prompt}],
+            max_tokens=500,
+            temperature=0.85,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
         )
         raw = resp.choices[0].message.content or ""
     except Exception as e:
         print(f"[Apollo] generate_personalized_email error: {e}")
-        return {
-            "subject": f"Quick intro — {candidate.get('name', '')}",
-            "body": "",
-        }
+        return {"subject": f"Quick intro — {c_name}", "body": ""}
 
-    subject, body, in_body = "", "", False
-    for line in raw.strip().split("\n"):
+    subject, body = "", ""
+    lines = raw.strip().split("\n")
+    for i, line in enumerate(lines):
         if line.startswith("Subject:"):
             subject = line.replace("Subject:", "").strip()
-        elif line.startswith("Body:"):
-            in_body = True
-        elif in_body:
-            body += line + "\n"
+            body = "\n".join(lines[i + 1:]).strip()
+            break
+    if not subject:
+        body = raw.strip()
 
     return {
-        "subject": subject or f"Quick intro — {candidate.get('name', '')}",
-        "body": body.strip() or raw.strip(),
+        "subject": subject or f"Quick intro — {c_name}",
+        "body": body or raw.strip(),
     }
 
 

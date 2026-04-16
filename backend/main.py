@@ -22,32 +22,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Module imports ─────────────────────────────────────────────────────────────
-# Written by algorithm team. Auto-resolve after `git pull` + server restart.
-# Fallbacks keep the pipeline running until each module is merged.
-
-try:
-    from modules.candidate_profile_extractor import extract_profile as _extract_profile  # type: ignore
-    print("[Main] ✅ modules.candidate_profile_extractor")
-except ImportError:
-    _extract_profile = None
-    print("[Main] ⚠️  modules.candidate_profile_extractor — using raw profile fallback")
-
-try:
-    from modules.contact_search import search_and_enrich as _search_and_enrich  # type: ignore
-    print("[Main] ✅ modules.contact_search")
-except ImportError:
-    _search_and_enrich = None
-    print("[Main] ⚠️  modules.contact_search — using apollo fallback")
-
-try:
-    from modules.email_generator import generate as _generate_email  # type: ignore
-    print("[Main] ✅ modules.email_generator")
-except ImportError:
-    _generate_email = None
-    print("[Main] ⚠️  modules.email_generator — using openai fallback")
-
-
 # ── In-Memory Storage ─────────────────────────────────────────────────────────
 
 USER_PROFILES: dict = {}
@@ -57,12 +31,12 @@ DRAFT_EMAILS: dict = {}
 # ── Request Models ────────────────────────────────────────────────────────────
 
 class RunPipelineRequest(BaseModel):
-    user_query: str    # e.g. "5 recruiters at Apple in Bay Area"
+    user_query: str
     profile_id: str
 
 class GenerateFromContactsRequest(BaseModel):
     profile_id: str
-    contacts: list[dict]  # raw contacts from JS linkedin/discovery module
+    contacts: list[dict]  # raw output from JS contact_discovery / contact_discovery_linkedin modules
 
 class ApproveEmailRequest(BaseModel):
     subject: str = ""
@@ -70,39 +44,7 @@ class ApproveEmailRequest(BaseModel):
 
 class MockEventRequest(BaseModel):
     email_id: str
-    event: str         # opened | clicked | replied
-
-
-# ── Pipeline helpers (fallbacks when modules aren't merged yet) ───────────────
-
-async def do_contact_search(query: str, limit: int = 5) -> list[dict]:
-    if _search_and_enrich is not None:
-        return await _search_and_enrich(query, limit=limit)
-    return []  # contact discovery comes from JS module via /generate-from-contacts
-
-
-def do_extract_profile(user_profile: dict) -> dict:
-    if _extract_profile is not None:
-        return _extract_profile(
-            resume_text=user_profile.get("resume_text", ""),
-            name=user_profile.get("name", ""),
-            goal=user_profile.get("goal", ""),
-        )
-    return {
-        "name": user_profile.get("name", ""),
-        "goal": user_profile.get("goal", ""),
-        "key_skills": [],
-        "background_summary": user_profile.get("resume_text", "")[:300].strip(),
-        "unique_value": user_profile.get("goal", ""),
-        "tone_preference": "casual",
-    }
-
-
-async def do_generate_email(candidate: dict, contact: dict) -> dict:
-    if _generate_email is not None:
-        return await _generate_email(candidate, contact)
-    # apollo.generate_personalized_email uses LinkedIn + company context + Groq
-    return await apollo.generate_personalized_email(candidate, contact)
+    event: str  # opened | clicked | replied
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -117,19 +59,54 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
         return ""
 
 
+def build_candidate(user_profile: dict) -> dict:
+    return {
+        "name": user_profile.get("name", ""),
+        "goal": user_profile.get("goal", ""),
+        "key_skills": [],
+        "background_summary": user_profile.get("resume_text", "")[:300].strip(),
+    }
+
+
+def normalize_contact(c: dict) -> dict:
+    """Normalize raw JS module contact fields to backend format."""
+    return {
+        "id": c.get("id", ""),
+        "name": c.get("full_name") or c.get("name", ""),
+        "title": c.get("title", ""),
+        "company": c.get("organization_name") or c.get("company", ""),
+        "email": c.get("email", ""),
+        "linkedin_url": c.get("linkedin_url", ""),
+        "city": c.get("city", ""),
+        "seniority": c.get("seniority", ""),
+    }
+
+
+def make_email_record(email_id: str, profile_id: str, contact: dict, email: dict) -> dict:
+    return {
+        "email_id": email_id,
+        "profile_id": profile_id,
+        "contact_name": contact.get("name", ""),
+        "contact_title": contact.get("title", ""),
+        "company": contact.get("company", ""),
+        "to": contact.get("email", ""),
+        "linkedin_url": contact.get("linkedin_url", ""),
+        "subject": email.get("subject", ""),
+        "body": email.get("body", ""),
+        "status": "pending",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "sent_at": None,
+        "opened": False,
+        "clicked": False,
+        "replied": False,
+    }
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.get("/health")
 async def health():
-    return {
-        "status": "ok",
-        "time": datetime.now(timezone.utc).isoformat(),
-        "modules": {
-            "candidate_profile_extractor": _extract_profile is not None,
-            "contact_search": _search_and_enrich is not None,
-            "email_generator": _generate_email is not None,
-        },
-    }
+    return {"status": "ok", "time": datetime.now(timezone.utc).isoformat()}
 
 
 @app.post("/onboard")
@@ -157,68 +134,32 @@ async def onboard(
 @app.post("/run-pipeline")
 async def run_pipeline(req: RunPipelineRequest):
     """
-    Step 1: contact_search  → finds + enriches contacts (Apollo + LinkedIn data)
-    Step 2: candidate_profile_extractor → parses resume into structured profile
-    Step 3: email_generator → generates personalized draft per contact
-    All three come from modules/ if available, else fallback runs automatically.
+    Accepts a natural-language query and profile_id.
+    Contact discovery is done via the JS modules (contact_discovery / contact_discovery_linkedin).
+    Use /generate-from-contacts to pass their output directly into the email pipeline.
     """
     profile = USER_PROFILES.get(req.profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found — call /onboard first")
 
-    print(f"[Pipeline] Query: '{req.user_query}'")
-
-    print("[Pipeline] Step 1: Searching contacts...")
-    contacts = await do_contact_search(req.user_query)
-    if not contacts:
-        return {"status": "ok", "count": 0, "emails": [], "message": "No contacts found"}
-
-    print("[Pipeline] Step 2: Extracting candidate profile...")
-    candidate = do_extract_profile(profile)
-
-    print(f"[Pipeline] Step 3: Generating {len(contacts)} emails...")
-    now = datetime.now(timezone.utc).isoformat()
-    email_records = []
-
-    for i, contact in enumerate(contacts):
-        print(f"[Pipeline]   {i+1}/{len(contacts)} → {contact.get('name')} at {contact.get('company')}")
-        email = await do_generate_email(candidate, contact)
-
-        email_id = str(uuid.uuid4())
-        record = {
-            "email_id": email_id,
-            "profile_id": req.profile_id,
-            "contact_name": contact.get("name", ""),
-            "contact_title": contact.get("title", ""),
-            "company": contact.get("company", ""),
-            "to": contact.get("email", ""),
-            "linkedin_url": contact.get("linkedin_url", ""),
-            "subject": email.get("subject", ""),
-            "body": email.get("body", ""),
-            "status": "pending",
-            "created_at": now,
-            "sent_at": None,
-            "opened": False,
-            "clicked": False,
-            "replied": False,
-        }
-        DRAFT_EMAILS[email_id] = record
-        email_records.append(record)
-
-    print(f"[Pipeline] Done — {len(email_records)} drafts ready for review")
     return {
         "status": "ok",
-        "count": len(email_records),
-        "message": "Review and approve emails before sending.",
-        "emails": email_records,
+        "count": 0,
+        "emails": [],
+        "message": (
+            "Contact discovery runs via the JS modules. "
+            "Run: node --env-file=.env tests/contact_discovery_linkedin.mjs "
+            "then POST the contacts to /generate-from-contacts."
+        ),
     }
 
 
 @app.post("/generate-from-contacts")
 async def generate_from_contacts(req: GenerateFromContactsRequest):
     """
-    Accepts pre-fetched contacts from the JS linkedin/discovery module,
-    enriches them via Apollo, and generates personalized emails with Groq.
+    Accepts contacts from JS contact_discovery or contact_discovery_linkedin module output.
+    Enriches each contact via Apollo (LinkedIn headline, bio, company info),
+    then generates a personalized email using AI (starts with Hello, ends with Thanks).
     """
     profile = USER_PROFILES.get(req.profile_id)
     if not profile:
@@ -228,56 +169,27 @@ async def generate_from_contacts(req: GenerateFromContactsRequest):
 
     print(f"[GenerateFromContacts] {len(req.contacts)} contacts received")
 
-    # Normalize JS module field names → backend field names
-    normalized = []
-    for c in req.contacts:
-        normalized.append({
-            "id": c.get("id", ""),
-            "name": c.get("full_name") or c.get("name", ""),
-            "title": c.get("title", ""),
-            "company": c.get("organization_name") or c.get("company", ""),
-            "email": c.get("email", ""),
-            "linkedin_url": c.get("linkedin_url", ""),
-            "city": c.get("city", ""),
-            "seniority": c.get("seniority", ""),
-        })
+    normalized = [normalize_contact(c) for c in req.contacts]
 
     print("[GenerateFromContacts] Enriching via Apollo...")
     enriched = await asyncio.gather(*[apollo.enrich_contact(c) for c in normalized])
 
-    candidate = do_extract_profile(profile)
-    now = datetime.now(timezone.utc).isoformat()
+    candidate = build_candidate(profile)
     email_records = []
 
-    print(f"[GenerateFromContacts] Generating {len(enriched)} emails...")
+    print(f"[GenerateFromContacts] Generating {len(enriched)} personalized emails...")
     for i, contact in enumerate(enriched):
         print(f"[GenerateFromContacts]   {i+1}/{len(enriched)} → {contact.get('name')} at {contact.get('company')}")
-        email = await do_generate_email(candidate, contact)
+        email = await apollo.generate_personalized_email(candidate, contact)
         email_id = str(uuid.uuid4())
-        record = {
-            "email_id": email_id,
-            "profile_id": req.profile_id,
-            "contact_name": contact.get("name", ""),
-            "contact_title": contact.get("title", ""),
-            "company": contact.get("company", ""),
-            "to": contact.get("email", ""),
-            "linkedin_url": contact.get("linkedin_url", ""),
-            "subject": email.get("subject", ""),
-            "body": email.get("body", ""),
-            "status": "pending",
-            "created_at": now,
-            "sent_at": None,
-            "opened": False,
-            "clicked": False,
-            "replied": False,
-        }
+        record = make_email_record(email_id, req.profile_id, contact, email)
         DRAFT_EMAILS[email_id] = record
         email_records.append(record)
 
     return {
         "status": "ok",
         "count": len(email_records),
-        "message": "Emails generated from JS module contacts. Review and approve before sending.",
+        "message": "Review and approve emails before sending.",
         "emails": email_records,
     }
 
