@@ -14,7 +14,7 @@ from pathlib import Path
 
 # Configuration
 API_BASE_URL = "http://localhost:8000"
-MOCK_RESUME_PATH = "/tmp/mock_resume.pdf"
+MOCK_RESUME_PATH = r"C:\Users\adiks\APOLLO\Outreach_AI_Apollo\AdityaShah_Resume.pdf"
 
 def print_header(text):
     """Print formatted header."""

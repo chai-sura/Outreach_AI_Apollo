@@ -1,7 +1,7 @@
 import { runContactDiscoveryLinkedin } from '../modules/contact_discovery_linkedin.js';
 
 const intentText =
-  'I want to work as a machine learning engineer at NVIDIA and reach out to recruiters';
+  'I want to work as a machine learning engineer at NVIDIA and reach out to recruiters located in the united states';
 
 try {
   const result = await runContactDiscoveryLinkedin({
