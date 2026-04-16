@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI  # Groq is OpenAI-compatible
 
 import apollo
 
@@ -102,8 +102,11 @@ async def do_generate_email(candidate: dict, contact: dict) -> dict:
     if _generate_email is not None:
         return await _generate_email(candidate, contact)
 
-    # OpenAI fallback
-    client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY", ""))
+    # Groq fallback (OpenAI-compatible)
+    client = AsyncOpenAI(
+        api_key=os.getenv("GROQ_API_KEY", ""),
+        base_url="https://api.groq.com/openai/v1",
+    )
     context_lines = []
     if contact.get("headline"):
         context_lines.append(f"LinkedIn headline: {contact['headline']}")
@@ -132,13 +135,13 @@ Body:
 
     try:
         resp = await client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="llama-3.3-70b-versatile",
             max_tokens=300,
             messages=[{"role": "user", "content": prompt}],
         )
         raw = resp.choices[0].message.content or ""
     except Exception as e:
-        print(f"[EmailFallback] OpenAI error: {e}")
+        print(f"[EmailFallback] Groq error: {e}")
         return {"subject": f"Quick intro — {candidate.get('name','')}", "body": ""}
 
     subject, body, in_body = "", "", False

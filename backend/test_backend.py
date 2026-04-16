@@ -87,7 +87,7 @@ async def run():
         r = await c.get("/emails/pending")
         log("GET /emails/pending → 200", r.status_code == 200)
         pending = r.json()
-        log("count matches", pending.get("count", 0) == count, str(pending.get("count")))
+        log("count >= emails from this run", pending.get("count", 0) >= count, str(pending.get("count")))
 
         if email_id:
             print("\n── 6. Approve email ──────────────────────────")
