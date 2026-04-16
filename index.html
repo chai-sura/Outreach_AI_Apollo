@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Outreach AI — Apollo × Claude</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet"/>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --bg:#0a0a0f;--surface:#13131a;--surface2:#1c1c26;--surface3:#252532;
+    --border:#2a2a3a;--border2:#3a3a50;
+    --accent:#6c63ff;--accent2:#a78bfa;--accent3:#38bdf8;
+    --text:#f0f0ff;--text2:#9898b8;--text3:#5a5a7a;
+    --green:#10b981;--amber:#f59e0b;--red:#ef4444;
+  }
+  body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;font-size:15px;min-height:100vh}
+  h1,h2,h3,.syne{font-family:'Syne',sans-serif}
+
+  .app{max-width:900px;margin:0 auto;padding:2rem 1.5rem 4rem}
+
+  .header{text-align:center;margin-bottom:3rem;padding-top:1rem}
+  .header .badge{display:inline-flex;align-items:center;gap:6px;background:rgba(108,99,255,0.15);border:1px solid rgba(108,99,255,0.3);color:var(--accent2);font-size:12px;font-family:'Syne',sans-serif;letter-spacing:0.08em;text-transform:uppercase;padding:5px 14px;border-radius:100px;margin-bottom:1.2rem}
+  .header h1{font-size:clamp(2rem,5vw,3.2rem);font-weight:800;letter-spacing:-0.02em;line-height:1.1;margin-bottom:0.75rem}
+  .header h1 span{background:linear-gradient(135deg,var(--accent2),var(--accent3));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+  .header p{color:var(--text2);font-size:16px;max-width:520px;margin:0 auto}
+
+  .tabs{display:flex;gap:4px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:4px;margin-bottom:2rem}
+  .tab{flex:1;padding:9px 12px;border-radius:8px;border:none;background:transparent;color:var(--text2);font-family:'DM Sans',sans-serif;font-size:14px;font-weight:500;cursor:pointer;transition:all 0.2s}
+  .tab.active{background:var(--surface3);color:var(--text);border:1px solid var(--border2)}
+  .tab:hover:not(.active){color:var(--text);background:rgba(255,255,255,0.04)}
+
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:1.5rem;margin-bottom:1rem}
+  .card-title{font-family:'Syne',sans-serif;font-size:13px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--text3);margin-bottom:1.25rem}
+
+  .field{margin-bottom:1rem}
+  .field label{display:block;font-size:13px;color:var(--text2);margin-bottom:6px;font-weight:500}
+  .field input,.field textarea,.field select{
+    width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:10px;
+    color:var(--text);font-family:'DM Sans',sans-serif;font-size:14px;padding:10px 14px;
+    outline:none;transition:border 0.2s
+  }
+  .field input:focus,.field textarea:focus,.field select:focus{border-color:var(--accent)}
+  .field textarea{resize:vertical;min-height:80px}
+  .field select option{background:#1c1c26}
+
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+  @media(max-width:600px){.row{grid-template-columns:1fr}}
+
+  .tone-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:0}
+  .tone-btn{padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--surface2);color:var(--text2);font-size:13px;cursor:pointer;transition:all 0.2s;text-align:center}
+  .tone-btn.selected{border-color:var(--accent);background:rgba(108,99,255,0.15);color:var(--accent2)}
+  .tone-btn:hover:not(.selected){border-color:var(--border2);color:var(--text)}
+
+  .btn-primary{width:100%;padding:13px;border-radius:12px;border:none;background:linear-gradient(135deg,var(--accent),#8b5cf6);color:#fff;font-family:'Syne',sans-serif;font-size:15px;font-weight:600;cursor:pointer;transition:all 0.2s;margin-top:0.5rem;letter-spacing:0.02em}
+  .btn-primary:hover{opacity:0.9;transform:translateY(-1px)}
+  .btn-primary:active{transform:translateY(0)}
+  .btn-primary:disabled{opacity:0.5;cursor:not-allowed;transform:none}
+
+  .btn-sm{padding:7px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface2);color:var(--text2);font-size:13px;cursor:pointer;transition:all 0.2s;font-family:'DM Sans',sans-serif}
+  .btn-sm:hover{border-color:var(--border2);color:var(--text)}
+  .btn-sm.copy-btn.copied{border-color:var(--green);color:var(--green);background:rgba(16,185,129,0.1)}
+
+  .result-section{margin-top:1.5rem}
+  .result-card{background:var(--surface);border:1px solid var(--border);border-radius:16px;overflow:hidden;margin-bottom:1rem}
+  .result-header{padding:1rem 1.25rem;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}
+  .result-header .person{display:flex;align-items:center;gap:10px}
+  .avatar{width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,var(--accent),#8b5cf6);display:flex;align-items:center;justify-content:center;font-family:'Syne',sans-serif;font-weight:700;font-size:14px;flex-shrink:0}
+  .result-header .info h3{font-size:15px;font-weight:500;font-family:'Syne',sans-serif}
+  .result-header .info p{font-size:13px;color:var(--text2);margin-top:1px}
+  .result-actions{display:flex;gap:8px;align-items:center}
+
+  .confidence{display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:4px 10px;border-radius:100px}
+  .conf-high{background:rgba(16,185,129,0.15);color:var(--green);border:1px solid rgba(16,185,129,0.25)}
+  .conf-med{background:rgba(245,158,11,0.15);color:var(--amber);border:1px solid rgba(245,158,11,0.25)}
+  .conf-low{background:rgba(239,68,68,0.15);color:var(--red);border:1px solid rgba(239,68,68,0.25)}
+
+  .result-body{padding:1.25rem}
+  .info-pills{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:1.25rem}
+  .pill{font-size:12px;padding:4px 10px;border-radius:100px;background:var(--surface3);border:1px solid var(--border);color:var(--text2)}
+  .pill.accent{background:rgba(108,99,255,0.12);border-color:rgba(108,99,255,0.25);color:var(--accent2)}
+
+  .email-label{font-size:12px;color:var(--text3);font-weight:500;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:8px}
+  .email-box{background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:1rem 1.25rem;font-size:14px;line-height:1.7;color:var(--text);white-space:pre-wrap;word-break:break-word}
+  .email-subject{font-size:13px;color:var(--text2);background:var(--surface3);border:1px solid var(--border);border-radius:8px;padding:7px 12px;margin-bottom:8px}
+  .email-subject span{color:var(--text3);margin-right:6px}
+
+  .loading-state{padding:2.5rem;text-align:center}
+  .spinner{width:36px;height:36px;border:2px solid var(--border2);border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 1rem}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .loading-state p{color:var(--text2);font-size:14px}
+  .loading-steps{list-style:none;text-align:left;max-width:260px;margin:1rem auto 0;display:flex;flex-direction:column;gap:6px}
+  .loading-steps li{font-size:13px;color:var(--text3);display:flex;align-items:center;gap:8px;transition:color 0.3s}
+  .loading-steps li.done{color:var(--green)}
+  .loading-steps li.active{color:var(--text2)}
+  .step-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}
+
+  .empty-state{text-align:center;padding:3rem 1rem;color:var(--text3)}
+  .error-msg{background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2);color:var(--red);padding:10px 14px;border-radius:10px;font-size:13px;margin-bottom:1rem}
+
+  .toggle-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)}
+  .toggle-row:last-child{border-bottom:none}
+  .toggle-row span{font-size:14px;color:var(--text2)}
+  .toggle{position:relative;width:38px;height:22px;cursor:pointer}
+  .toggle input{opacity:0;width:0;height:0}
+  .toggle-slider{position:absolute;inset:0;background:var(--surface3);border-radius:100px;border:1px solid var(--border2);transition:0.2s}
+  .toggle-slider:before{content:'';position:absolute;width:16px;height:16px;left:2px;top:2px;background:var(--text3);border-radius:50%;transition:0.2s}
+  .toggle input:checked+.toggle-slider{background:rgba(108,99,255,0.3);border-color:var(--accent)}
+  .toggle input:checked+.toggle-slider:before{transform:translateX(16px);background:var(--accent2)}
+
+  .bulk-results{display:flex;flex-direction:column;gap:1rem}
+  .bulk-item{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+  .bulk-item-header{padding:0.875rem 1.1rem;display:flex;align-items:center;justify-content:space-between;cursor:pointer;gap:8px}
+  .bulk-item-header:hover{background:rgba(255,255,255,0.02)}
+  .bulk-item-body{padding:1rem 1.1rem;border-top:1px solid var(--border);display:none}
+  .bulk-item-body.open{display:block}
+  .chevron{transition:transform 0.2s;color:var(--text3);font-size:12px}
+  .chevron.open{transform:rotate(180deg)}
+
+  .stats-bar{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:1.5rem}
+  .stat{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:0.875rem 1rem;text-align:center}
+  .stat-val{font-family:'Syne',sans-serif;font-size:22px;font-weight:700;color:var(--text)}
+  .stat-label{font-size:12px;color:var(--text3);margin-top:2px}
+
+  .gmail-btn{display:flex;align-items:center;gap:6px;padding:7px 14px;border-radius:8px;border:1px solid rgba(56,189,248,0.3);background:rgba(56,189,248,0.08);color:var(--accent3);font-size:13px;cursor:pointer;transition:all 0.2s;font-family:'DM Sans',sans-serif}
+  .gmail-btn:hover{background:rgba(56,189,248,0.15)}
+  .section-hint{font-size:12px;color:var(--text3);margin-top:-0.5rem;margin-bottom:1rem}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="header">
+    <div class="badge">🚀 Apollo × Claude AI</div>
+    <h1>Smart <span>Outreach</span><br/>Email Generator</h1>
+    <p>Find anyone's email, research their background, and craft hyper-personalized messages — in seconds.</p>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('single')">Single Contact</button>
+    <button class="tab" onclick="switchTab('bulk')">Bulk Mode</button>
+    <button class="tab" onclick="switchTab('settings')">Settings</button>
+  </div>
+
+  <!-- SINGLE TAB -->
+  <div id="tab-single">
+    <div class="card">
+      <div class="card-title">Contact Info</div>
+      <div class="row">
+        <div class="field"><label>First Name *</label><input type="text" id="fname" placeholder="Sarah"/></div>
+        <div class="field"><label>Last Name *</label><input type="text" id="lname" placeholder="Chen"/></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Company</label><input type="text" id="company" placeholder="Stripe"/></div>
+        <div class="field"><label>Job Title (optional)</label><input type="text" id="title" placeholder="VP of Engineering"/></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Tone & Context</div>
+      <div class="field" style="margin-bottom:1.25rem">
+        <label>Email Tone</label>
+        <div class="tone-grid" id="tone-grid">
+          <button class="tone-btn selected" onclick="setTone(this,'casual')">😊 Casual</button>
+          <button class="tone-btn" onclick="setTone(this,'formal')">👔 Formal</button>
+          <button class="tone-btn" onclick="setTone(this,'sales')">🎯 Sales Pitch</button>
+          <button class="tone-btn" onclick="setTone(this,'partnership')">🤝 Partnership</button>
+          <button class="tone-btn" onclick="setTone(this,'job')">💼 Job Inquiry</button>
+          <button class="tone-btn" onclick="setTone(this,'investor')">📈 Investor</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Your Goal / Context (optional)</label>
+        <textarea id="goal" placeholder="e.g. Pitch our new API integration tool that helps engineering teams save 10 hrs/week..."></textarea>
+      </div>
+      <div class="toggle-row">
+        <span>Research company background too</span>
+        <label class="toggle"><input type="checkbox" id="tog-company" checked/><span class="toggle-slider"></span></label>
+      </div>
+      <div class="toggle-row">
+        <span>Include recent news / funding rounds</span>
+        <label class="toggle"><input type="checkbox" id="tog-news" checked/><span class="toggle-slider"></span></label>
+      </div>
+    </div>
+
+    <div id="error-single"></div>
+    <button class="btn-primary" id="gen-btn" onclick="generateSingle()">✨ Generate Personalized Email</button>
+    <div id="result-single" class="result-section"></div>
+  </div>
+
+  <!-- BULK TAB -->
+  <div id="tab-bulk" style="display:none">
+    <div class="card">
+      <div class="card-title">Bulk Contacts</div>
+      <p class="section-hint">One per line: First Last, Company (company optional)</p>
+      <div class="field">
+        <textarea id="bulk-input" style="min-height:160px" placeholder="Sarah Chen, Stripe&#10;John Smith, OpenAI&#10;Emily Torres, Notion&#10;David Park, Figma"></textarea>
+      </div>
+      <div class="field">
+        <label>Email Tone (applies to all)</label>
+        <div class="tone-grid" id="bulk-tone-grid">
+          <button class="tone-btn selected" onclick="setBulkTone(this,'casual')">😊 Casual</button>
+          <button class="tone-btn" onclick="setBulkTone(this,'formal')">👔 Formal</button>
+          <button class="tone-btn" onclick="setBulkTone(this,'sales')">🎯 Sales Pitch</button>
+          <button class="tone-btn" onclick="setBulkTone(this,'partnership')">🤝 Partnership</button>
+          <button class="tone-btn" onclick="setBulkTone(this,'job')">💼 Job Inquiry</button>
+          <button class="tone-btn" onclick="setBulkTone(this,'investor')">📈 Investor</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Shared Context / Goal (optional)</label>
+        <textarea id="bulk-goal" placeholder="e.g. Introducing our new product for engineering teams..."></textarea>
+      </div>
+    </div>
+    <div id="error-bulk"></div>
+    <button class="btn-primary" id="bulk-btn" onclick="generateBulk()">✨ Generate All Emails</button>
+    <div id="result-bulk" class="result-section"></div>
+  </div>
+
+  <!-- SETTINGS TAB -->
+  <div id="tab-settings" style="display:none">
+    <div class="card">
+      <div class="card-title">API Keys</div>
+      <div class="field">
+        <label>Apollo API Key</label>
+        <input type="password" id="apollo-key" placeholder="Enter your Apollo API key"/>
+      </div>
+      <div class="field">
+        <label>Anthropic API Key</label>
+        <input type="password" id="anthropic-key" placeholder="Enter your Anthropic API key"/>
+      </div>
+      <p style="font-size:12px;color:var(--text3);margin-top:0.5rem">Keys are stored in memory only and never sent anywhere except the respective APIs.</p>
+    </div>
+    <div class="card">
+      <div class="card-title">About</div>
+      <p style="font-size:14px;color:var(--text2);line-height:1.7">This tool uses the <strong style="color:var(--text)">Apollo API</strong> to find verified emails and professional profiles, then uses <strong style="color:var(--text)">Claude (Anthropic)</strong> to generate personalized outreach emails based on the person's background, company, and your goals.<br/><br/>Built for the Apollo × Google Cloud Hackathon 2025.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+let currentTone = 'casual';
+let bulkTone = 'casual';
+
+function switchTab(name) {
+  ['single','bulk','settings'].forEach(t => {
+    document.getElementById('tab-'+t).style.display = t===name?'block':'none';
+  });
+  document.querySelectorAll('.tab').forEach((b,i) => {
+    b.classList.toggle('active', ['single','bulk','settings'][i]===name);
+  });
+}
+
+function setTone(btn, tone) {
+  currentTone = tone;
+  document.querySelectorAll('#tone-grid .tone-btn').forEach(b => b.classList.remove('selected'));
+  btn.classList.add('selected');
+}
+
+function setBulkTone(btn, tone) {
+  bulkTone = tone;
+  document.querySelectorAll('#bulk-tone-grid .tone-btn').forEach(b => b.classList.remove('selected'));
+  btn.classList.add('selected');
+}
+
+function getInitials(name) {
+  return name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
+}
+
+function confBadge(score) {
+  if (!score) return '';
+  const pct = Math.round(score * 100);
+  const cls = pct >= 80 ? 'conf-high' : pct >= 50 ? 'conf-med' : 'conf-low';
+  const dot = pct >= 80 ? '●' : pct >= 50 ? '◉' : '○';
+  return `<span class="confidence ${cls}">${dot} ${pct}% confidence</span>`;
+}
+
+function copyText(id, btn) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  navigator.clipboard.writeText(el.innerText).then(() => {
+    btn.textContent = '✓ Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+
+function gmailDraft(subject, body) {
+  const url = `https://mail.google.com/mail/?view=cm&fs=1&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  window.open(url, '_blank');
+}
+
+async function callApollo(firstName, lastName, company) {
+  const key = document.getElementById('apollo-key').value.trim();
+  if (!key) throw new Error('Apollo API key missing — go to Settings tab');
+  const body = { api_key: key, first_name: firstName, last_name: lastName };
+  if (company) body.organization_name = company;
+  const r = await fetch('https://api.apollo.io/v1/people/match', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
+    body: JSON.stringify(body)
+  });
+  if (!r.ok) throw new Error(`Apollo API error: ${r.status}`);
+  return r.json();
+}
+
+async function callClaude(prompt) {
+  const key = document.getElementById('anthropic-key').value.trim();
+  if (!key) throw new Error('Anthropic API key missing — go to Settings tab');
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': key,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1000,
+      messages: [{ role: 'user', content: prompt }]
+    })
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(()=>({}));
+    throw new Error(err.error?.message || `Claude API error: ${r.status}`);
+  }
+  const d = await r.json();
+  return d.content[0].text;
+}
+
+function buildPrompt(personData, tone, goal, includeCompany, includeNews) {
+  const toneDesc = {
+    casual: 'friendly and conversational, like reaching out to a peer',
+    formal: 'professional and polished, suitable for senior executives',
+    sales: 'compelling and benefit-focused, addressing pain points',
+    partnership: 'collaborative, exploring mutual value and synergies',
+    job: 'enthusiastic about the opportunity, highlighting relevant fit',
+    investor: 'concise, data-driven, and focused on traction and opportunity'
+  }[tone] || 'professional';
+
+  let context = `Name: ${personData.name || 'Unknown'}\n`;
+  if (personData.title) context += `Title: ${personData.title}\n`;
+  if (personData.company) context += `Company: ${personData.company}\n`;
+  if (personData.email) context += `Email: ${personData.email}\n`;
+  if (personData.city) context += `Location: ${personData.city}\n`;
+  if (personData.companyDetails) context += `\nCompany Details:\n${personData.companyDetails}\n`;
+
+  return `You are an expert at writing hyper-personalized cold outreach emails.
+
+Person Info:
+${context}
+
+Tone: ${toneDesc}
+${goal ? `\nSender's Goal: ${goal}` : ''}
+
+Write a personalized cold outreach email. Use specific details from their profile. Keep it concise (under 150 words for the body).
+
+Respond ONLY as JSON with this exact format (no markdown, no extra text):
+{"subject":"...","opening":"...","body":"...","closing":"..."}`;
+}
+
+function parseClaudeEmail(raw) {
+  try {
+    return JSON.parse(raw.replace(/```json|```/g, '').trim());
+  } catch {
+    return { subject: 'Reaching Out', body: raw, opening: '', closing: 'Best regards' };
+  }
+}
+
+function renderEmailCard(personData, emailData, idSuffix, tone) {
+  const emailFull = `${emailData.opening ? emailData.opening + '\n\n' : ''}${emailData.body}\n\n${emailData.closing || ''}`;
+  return `
+    <div class="result-card">
+      <div class="result-header">
+        <div class="person">
+          <div class="avatar">${getInitials(personData.name || '??')}</div>
+          <div class="info">
+            <h3>${personData.name || 'Unknown'}</h3>
+            <p>${[personData.title, personData.company].filter(Boolean).join(' · ') || 'No profile found'}</p>
+          </div>
+        </div>
+        <div class="result-actions">
+          ${confBadge(personData.emailConfidence)}
+          <button class="btn-sm copy-btn" onclick="copyText('email-body-${idSuffix}',this)">Copy</button>
+          <button class="gmail-btn" onclick="gmailDraft('${(emailData.subject||'').replace(/'/g,"\\'")}','${emailFull.replace(/'/g,"\\'").replace(/\n/g,'\\n')}')">Gmail Draft</button>
+        </div>
+      </div>
+      <div class="result-body">
+        <div class="info-pills">
+          ${personData.email ? `<span class="pill accent">📧 ${personData.email}</span>` : '<span class="pill">No email found</span>'}
+          ${personData.city ? `<span class="pill">📍 ${personData.city}</span>` : ''}
+          ${personData.linkedin ? `<span class="pill">LinkedIn found</span>` : ''}
+          <span class="pill">${tone} tone</span>
+        </div>
+        <div class="email-label">Generated Email</div>
+        <div class="email-subject"><span>Subject:</span>${emailData.subject || ''}</div>
+        <div class="email-box" id="email-body-${idSuffix}">${emailData.opening ? emailData.opening+'\n\n' : ''}${emailData.body || ''}${emailData.closing ? '\n\n'+emailData.closing : ''}</div>
+      </div>
+    </div>`;
+}
+
+async function generateSingle() {
+  const fname = document.getElementById('fname').value.trim();
+  const lname = document.getElementById('lname').value.trim();
+  const company = document.getElementById('company').value.trim();
+  const title = document.getElementById('title').value.trim();
+  const goal = document.getElementById('goal').value.trim();
+  const inclCompany = document.getElementById('tog-company').checked;
+  const inclNews = document.getElementById('tog-news').checked;
+  const errEl = document.getElementById('error-single');
+  errEl.innerHTML = '';
+
+  if (!fname || !lname) {
+    errEl.innerHTML = '<div class="error-msg">Please enter at least a first and last name.</div>';
+    return;
+  }
+
+  const resultEl = document.getElementById('result-single');
+  const btn = document.getElementById('gen-btn');
+  btn.disabled = true;
+  btn.textContent = 'Generating...';
+
+  resultEl.innerHTML = `
+    <div class="result-card">
+      <div class="loading-state">
+        <div class="spinner"></div>
+        <p>Looking up ${fname} ${lname}...</p>
+        <ul class="loading-steps">
+          <li id="ls1" class="active"><span class="step-dot"></span>Searching Apollo database</li>
+          <li id="ls2"><span class="step-dot"></span>Fetching profile & email</li>
+          <li id="ls3"><span class="step-dot"></span>Researching background</li>
+          <li id="ls4"><span class="step-dot"></span>Crafting your email with Claude</li>
+        </ul>
+      </div>
+    </div>`;
+
+  const step = (n) => {
+    for (let i=1;i<=4;i++) {
+      const el = document.getElementById('ls'+i);
+      if (!el) return;
+      if (i < n) { el.classList.add('done'); el.classList.remove('active'); }
+      else if (i === n) { el.classList.add('active'); el.classList.remove('done'); }
+    }
+  };
+
+  try {
+    step(1);
+    let personData = { name: `${fname} ${lname}`, company, title, email: null, emailConfidence: null, linkedin: null, city: null };
+
+    try {
+      step(2);
+      const apolloRes = await callApollo(fname, lname, company);
+      const person = apolloRes.person || {};
+      personData.email = person.email || null;
+      personData.emailConfidence = person.email_confidence || null;
+      personData.title = person.title || title || null;
+      personData.company = (person.organization && person.organization.name) || company || null;
+      personData.city = person.city || null;
+      personData.linkedin = person.linkedin_url || null;
+      if (person.organization && inclCompany) {
+        personData.companyDetails = [
+          person.organization.industry ? `Industry: ${person.organization.industry}` : null,
+          person.organization.estimated_num_employees ? `Employees: ${person.organization.estimated_num_employees}` : null,
+          person.organization.short_description || null
+        ].filter(Boolean).join('\n');
+      }
+    } catch(e) {
+      if (e.message.includes('Apollo API key missing')) throw e;
+    }
+
+    step(3);
+    step(4);
+    const prompt = buildPrompt(personData, currentTone, goal, inclCompany, inclNews);
+    const claudeRaw = await callClaude(prompt);
+    const emailData = parseClaudeEmail(claudeRaw);
+    resultEl.innerHTML = renderEmailCard(personData, emailData, 'single', currentTone);
+  } catch(e) {
+    resultEl.innerHTML = '';
+    errEl.innerHTML = `<div class="error-msg">${e.message}</div>`;
+  }
+
+  btn.disabled = false;
+  btn.textContent = '✨ Generate Personalized Email';
+}
+
+async function generateBulk() {
+  const raw = document.getElementById('bulk-input').value.trim();
+  const goal = document.getElementById('bulk-goal').value.trim();
+  const errEl = document.getElementById('error-bulk');
+  errEl.innerHTML = '';
+
+  if (!raw) {
+    errEl.innerHTML = '<div class="error-msg">Please enter at least one contact.</div>';
+    return;
+  }
+
+  const lines = raw.split('\n').map(l=>l.trim()).filter(Boolean);
+  const contacts = lines.map(line => {
+    const parts = line.split(',').map(s=>s.trim());
+    const nameParts = (parts[0]||'').split(' ');
+    return { firstName: nameParts[0]||'', lastName: nameParts.slice(1).join(' ')||'', company: parts[1]||'' };
+  }).filter(c => c.firstName);
+
+  if (!contacts.length) {
+    errEl.innerHTML = '<div class="error-msg">Could not parse any contacts. Use format: First Last, Company</div>';
+    return;
+  }
+
+  const btn = document.getElementById('bulk-btn');
+  btn.disabled = true;
+  btn.textContent = `Generating ${contacts.length} emails...`;
+
+  const resultEl = document.getElementById('result-bulk');
+  resultEl.innerHTML = `
+    <div class="stats-bar">
+      <div class="stat"><div class="stat-val" id="bs-total">${contacts.length}</div><div class="stat-label">Total</div></div>
+      <div class="stat"><div class="stat-val" id="bs-done" style="color:var(--green)">0</div><div class="stat-label">Done</div></div>
+      <div class="stat"><div class="stat-val" id="bs-fail" style="color:var(--red)">0</div><div class="stat-label">Failed</div></div>
+    </div>
+    <div class="bulk-results" id="bulk-results-list"></div>`;
+
+  const listEl = document.getElementById('bulk-results-list');
+  let done = 0, fail = 0;
+
+  for (let i = 0; i < contacts.length; i++) {
+    const c = contacts[i];
+    const name = `${c.firstName} ${c.lastName}`.trim();
+    const itemId = `bulk-item-${i}`;
+    const placeholder = document.createElement('div');
+    placeholder.className = 'bulk-item';
+    placeholder.id = itemId;
+    placeholder.innerHTML = `
+      <div class="bulk-item-header">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div class="avatar" style="width:30px;height:30px;font-size:11px">${getInitials(name)}</div>
+          <span style="font-size:14px;font-weight:500">${name}</span>
+        </div>
+        <span style="color:var(--text3);font-size:13px">Generating...</span>
+      </div>`;
+    listEl.appendChild(placeholder);
+
+    try {
+      const personData = { name, company: c.company, title: null, email: null, emailConfidence: null };
+      try {
+        const apolloRes = await callApollo(c.firstName, c.lastName, c.company);
+        const person = apolloRes.person || {};
+        personData.email = person.email || null;
+        personData.emailConfidence = person.email_confidence || null;
+        personData.title = person.title || null;
+        personData.company = (person.organization && person.organization.name) || c.company || null;
+        personData.city = person.city || null;
+      } catch {}
+
+      const prompt = buildPrompt(personData, bulkTone, goal, true, false);
+      const claudeRaw = await callClaude(prompt);
+      const emailData = parseClaudeEmail(claudeRaw);
+      const bodyId = `bulk-email-${i}`;
+      const emailFull = `${emailData.opening?emailData.opening+'\n\n':''}${emailData.body}\n\n${emailData.closing||''}`;
+
+      placeholder.innerHTML = `
+        <div class="bulk-item-header" onclick="toggleBulk('${itemId}')">
+          <div style="display:flex;align-items:center;gap:10px">
+            <div class="avatar" style="width:30px;height:30px;font-size:11px">${getInitials(name)}</div>
+            <div>
+              <span style="font-size:14px;font-weight:500">${name}</span>
+              ${personData.company?`<span style="font-size:12px;color:var(--text3);margin-left:6px">${personData.company}</span>`:''}
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            ${personData.email?`<span style="font-size:12px;color:var(--accent2)">${personData.email}</span>`:'<span style="font-size:12px;color:var(--text3)">No email</span>'}
+            ${confBadge(personData.emailConfidence)}
+            <span class="chevron" id="chev-${i}">▼</span>
+          </div>
+        </div>
+        <div class="bulk-item-body" id="body-${itemId}">
+          <div class="email-subject" style="margin-bottom:8px"><span>Subject:</span>${emailData.subject||''}</div>
+          <div class="email-box" id="${bodyId}">${emailFull}</div>
+          <div style="display:flex;gap:8px;margin-top:10px">
+            <button class="btn-sm copy-btn" onclick="copyText('${bodyId}',this)">Copy</button>
+            <button class="gmail-btn" onclick="gmailDraft('${(emailData.subject||'').replace(/'/g,"\\'")}','${emailFull.replace(/'/g,"\\'").replace(/\n/g,'\\n')}')">Gmail Draft</button>
+          </div>
+        </div>`;
+      done++;
+    } catch(e) {
+      placeholder.innerHTML = `
+        <div class="bulk-item-header">
+          <div style="display:flex;align-items:center;gap:10px">
+            <div class="avatar" style="width:30px;height:30px;font-size:11px;background:var(--surface3)">${getInitials(name)}</div>
+            <span style="font-size:14px">${name}</span>
+          </div>
+          <span style="font-size:12px;color:var(--red)">Failed: ${e.message.slice(0,50)}</span>
+        </div>`;
+      fail++;
+    }
+
+    document.getElementById('bs-done').textContent = done;
+    document.getElementById('bs-fail').textContent = fail;
+  }
+
+  btn.disabled = false;
+  btn.textContent = '✨ Generate All Emails';
+}
+
+function toggleBulk(itemId) {
+  const body = document.getElementById('body-'+itemId);
+  const idx = itemId.split('-').pop();
+  const chev = document.getElementById('chev-'+idx);
+  if (!body) return;
+  const open = body.classList.toggle('open');
+  if (chev) chev.classList.toggle('open', open);
+}
+</script>
+</body>
+</html>
